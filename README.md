@@ -1,3 +1,5 @@
+![build](https://github.com/domWinter/envoy-wasm-rbac/actions/workflows/ci.yml/badge.svg)
+
 # Envoy WASM RBAC Filter
 This repository contains an envoy wasm filter that is able to test a provided ACL list against a specified header field or JWT. The http header value can be a raw or base64 encoded json string.
 In case of JWT, the token is parsed from the <i>Authorization</i> HTTP header and the __signature validation is skipped__. Here the role claim is used and needs to contain the array of the roles.
