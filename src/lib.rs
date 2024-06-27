@@ -137,7 +137,7 @@ impl RootContext for RBACRoot {
                     return false;
                 }
             };
-            let config: Config = match serde_json::from_str(&json_string) {
+            let config: Config = match parse_config(&json_string) {
                 Ok(c) => c,
                 Err(err) => {
                     error!("{}", err);
@@ -179,6 +179,10 @@ fn acl_match<T: Eq>(match_all: bool, acl: &Vec<T>, entities: &Vec<T>) -> bool {
         return acl.iter().all(|a| entities.contains(a));
     }
     entities.iter().find(|e| acl.contains(e)).is_some()
+}
+
+fn parse_config(config_string: &str) -> Result<Config, serde_json::Error> {
+    serde_json::from_str(&config_string)
 }
 
 #[cfg(test)]
@@ -227,7 +231,7 @@ mod tests {
     fn parse_header_config() {
         let config = "{ \"acl\": [\"foo\", \"baa\"], \"source\": { \"type\": \"Header\", \"header_name\": \"Authorization\"}, \"match_all\": true }";
 
-        let config: Config = serde_json::from_str(&config).unwrap();
+        let config: Config = parse_config(&config).unwrap();
         assert!(config.match_all);
     }
 
@@ -235,7 +239,7 @@ mod tests {
     fn parse_jwt_config() {
         let config = "{ \"acl\": [\"foo\", \"baa\"], \"source\": { \"type\": \"Jwt\"}, \"match_all\": true }";
 
-        let config: Config = serde_json::from_str(&config).unwrap();
+        let config: Config = parse_config(&config).unwrap();
         assert!(config.match_all);
     }
 }
