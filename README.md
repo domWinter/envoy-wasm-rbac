@@ -1,6 +1,6 @@
 # Envoy WASM RBAC Filter
 This repository contains an envoy wasm filter that is able to test a provided ACL list against a specified header field or JWT. The http header value can be a raw or base64 encoded json string.
-In case of JWT, the token is parsed from the <i>Authorization</i> HTTP header and the __signature validation is skipped__. Here the role claim is used and need to contain the array of the roles.
+In case of JWT, the token is parsed from the <i>Authorization</i> HTTP header and the __signature validation is skipped__. Here the role claim is used and needs to contain the array of the roles.
 
 If any parsing of the headers or jwt failes or the ACL check fails, a HTTP 403 status is returned.
 If the ACL check succeeds, the request is continued to the upstream target.
@@ -12,7 +12,7 @@ just build
 
 ## Test
 ```bash
-just build
+just test
 ```
 
 ## Filter Configuration
