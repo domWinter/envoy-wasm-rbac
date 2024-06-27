@@ -1,6 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
-use jsonwebtoken::decode;
-use jsonwebtoken::{Algorithm::HS256, DecodingKey, Validation};
+use jsonwebtoken::{decode, Algorithm::HS256, DecodingKey, Validation};
 use log::error;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
@@ -9,9 +8,7 @@ use serde::{Deserialize, Serialize};
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Info);
     proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
-        Box::new(RBACRoot {
-            config: None,
-        })
+        Box::new(RBACRoot { config: None })
     });
 }}
 
@@ -41,88 +38,74 @@ struct RBACRoot {
 impl Context for RBACRoot {}
 impl HttpContext for RBACRoot {
     fn on_http_request_headers(&mut self, _: usize, _: bool) -> Action {
-        if let Some(config) = &self.config {
-            match &config.source {
+        match &self.config {
+            Some(config) => match &config.source {
                 DataSource::Header { header_name } => {
-                    let maybe_enc_header_val =
-                        match get_header_val(header_name, &self.get_http_request_headers()) {
-                            Some(h) => h,
-                            None => {
-                                self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
-                                return Action::Continue;
-                            }
-                        };
-
-                    // Test if base64 encoded
-                    let header_val = match general_purpose::STANDARD.decode(&maybe_enc_header_val) {
-                        Ok(decoded) => match String::from_utf8(decoded) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                error!("No valid utf8: {}", e);
-                                self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
-                                return Action::Continue;
-                            }
-                        },
-                        Err(_) => maybe_enc_header_val, //No base64
-                    };
-
-                    let entries: Vec<String> = match serde_json::from_str(&header_val) {
-                        Ok(e) => e,
-                        Err(e) => {
-                            error!("Json deserialisation error: {}", e);
-                            self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
-                            return Action::Continue;
-                        }
-                    };
-
-                    if acl_match(config.match_all, &config.acl, &entries) {
-                        return Action::Continue;
-                    }
-
-                    self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
-                    return Action::Continue;
+                    self.handle_header_source(header_name, config)
                 }
-                DataSource::Jwt {} => {
-                    let auth_header =
-                        match get_header_val("authorization", &self.get_http_request_headers()) {
-                            Some(h) => h,
-                            None => {
-                                self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
-                                return Action::Continue;
-                            }
-                        };
-
-                    let key = DecodingKey::from_secret(&[]);
-                    let mut validation = Validation::new(HS256);
-                    validation.insecure_disable_signature_validation();
-
-                    let roles = match decode::<Claims>(&auth_header, &key, &validation) {
-                        Ok(c) => match c.claims.roles {
-                            Some(roles) => roles,
-                            None => {
-                                self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
-                                return Action::Continue;
-                            }
-                        },
-                        Err(e) => {
-                            error!("JWT deserialisation error: {}", e);
-                            self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
-                            return Action::Continue;
-                        }
-                    };
-
-                    if acl_match(config.match_all, &config.acl, &roles) {
-                        return Action::Continue;
-                    }
-
-                    self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
-                    return Action::Continue;
-                }
-            }
-        } else {
-            self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
+                DataSource::Jwt => self.handle_jwt_source(config),
+            },
+            None => self.access_forbidden(),
         }
+    }
+}
 
+impl RBACRoot {
+    fn handle_header_source(&self, header_name: &str, config: &Config) -> Action {
+        let headers = self.get_http_request_headers();
+        let maybe_enc_header_val = match get_header_val(header_name, &headers) {
+            Some(h) => h,
+            None => return self.access_forbidden(),
+        };
+
+        let header_val = match decode_base64(&maybe_enc_header_val) {
+            Ok(val) => val,
+            Err(_) => maybe_enc_header_val, // Not base64 encoded
+        };
+
+        let entries: Vec<String> = match serde_json::from_str(&header_val) {
+            Ok(e) => e,
+            Err(e) => {
+                error!("JSON deserialization error: {}", e);
+                return self.access_forbidden();
+            }
+        };
+
+        if acl_match(config.match_all, &config.acl, &entries) {
+            Action::Continue
+        } else {
+            self.access_forbidden()
+        }
+    }
+
+    fn handle_jwt_source(&self, config: &Config) -> Action {
+        let headers = self.get_http_request_headers();
+        let auth_header = match get_header_val("authorization", &headers) {
+            Some(h) => h,
+            None => return self.access_forbidden(),
+        };
+
+        let key = DecodingKey::from_secret(&[]);
+        let mut validation = Validation::new(HS256);
+        validation.insecure_disable_signature_validation();
+
+        let roles = match decode::<Claims>(&auth_header, &key, &validation) {
+            Ok(c) => c.claims.roles.unwrap_or_else(Vec::new),
+            Err(e) => {
+                error!("JWT deserialization error: {}", e);
+                return self.access_forbidden();
+            }
+        };
+
+        if acl_match(config.match_all, &config.acl, &roles) {
+            Action::Continue
+        } else {
+            self.access_forbidden()
+        }
+    }
+
+    fn access_forbidden(&self) -> Action {
+        self.send_http_response(403, vec![], Some(b"Access forbidden.\n"));
         Action::Continue
     }
 }
@@ -160,29 +143,29 @@ impl RootContext for RBACRoot {
     }
 }
 
-fn get_header_val(key: &str, headers: &Vec<(String, String)>) -> Option<String> {
-    let header_vals: Vec<String> = headers
-        .into_iter()
-        .filter(|h| &h.0.to_lowercase() == &key.to_lowercase())
-        .map(|kv| kv.1.clone())
-        .collect();
-
-    if header_vals.len() != 1 {
-        return None;
-    }
-
-    Some(header_vals[0].clone())
+fn get_header_val(key: &str, headers: &[(String, String)]) -> Option<String> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v.clone())
 }
 
-fn acl_match<T: Eq>(match_all: bool, acl: &Vec<T>, entities: &Vec<T>) -> bool {
+fn decode_base64(encoded: &str) -> Result<String, base64::DecodeError> {
+    general_purpose::STANDARD
+        .decode(encoded)
+        .map(|decoded| String::from_utf8(decoded).unwrap_or_default())
+}
+
+fn acl_match<T: Eq>(match_all: bool, acl: &[T], entities: &[T]) -> bool {
     if match_all {
-        return acl.iter().all(|a| entities.contains(a));
+        acl.iter().all(|a| entities.contains(a))
+    } else {
+        entities.iter().any(|e| acl.contains(e))
     }
-    entities.iter().find(|e| acl.contains(e)).is_some()
 }
 
 fn parse_config(config_string: &str) -> Result<Config, serde_json::Error> {
-    serde_json::from_str(&config_string)
+    serde_json::from_str(config_string)
 }
 
 #[cfg(test)]
@@ -229,17 +212,32 @@ mod tests {
 
     #[test]
     fn parse_header_config() {
-        let config = "{ \"acl\": [\"foo\", \"baa\"], \"source\": { \"type\": \"Header\", \"header_name\": \"Authorization\"}, \"match_all\": true }";
+        let config = r#"
+        {
+            "acl": ["foo", "baa"],
+            "source": {
+                "type": "Header",
+                "header_name": "Authorization"
+            },
+            "match_all": true
+        }"#;
 
-        let config: Config = parse_config(&config).unwrap();
+        let config: Config = parse_config(config).unwrap();
         assert!(config.match_all);
     }
 
     #[test]
     fn parse_jwt_config() {
-        let config = "{ \"acl\": [\"foo\", \"baa\"], \"source\": { \"type\": \"Jwt\"}, \"match_all\": true }";
+        let config = r#"
+        {
+            "acl": ["foo", "baa"],
+            "source": {
+                "type": "Jwt"
+            },
+            "match_all": true
+        }"#;
 
-        let config: Config = parse_config(&config).unwrap();
+        let config: Config = parse_config(config).unwrap();
         assert!(config.match_all);
     }
 }
