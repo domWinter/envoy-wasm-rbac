@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn parse_header_config() {
-        let config = "{ \"acl\": [\"foo\", \"baa\"], \"source\": { \"type\": \"Header\", \"name\": \"Authorization\"}, \"match_all\": true }";
+        let config = "{ \"acl\": [\"foo\", \"baa\"], \"source\": { \"type\": \"Header\", \"header_name\": \"Authorization\"}, \"match_all\": true }";
 
         let config: Config = serde_json::from_str(&config).unwrap();
         assert!(config.match_all);
