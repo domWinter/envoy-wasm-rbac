@@ -15,6 +15,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --target wasm32-wasi --release
     - name: Run tests
       run: cargo test --verbose
+    - name: Upload WASM filter
+      uses: actions/upload-artifact@v3
+      with:
+        name: envoy_wasm_rbac.wasm
+        path: ./target/wasm32-wasi/release/envoy_wasm_rbac.wasm
